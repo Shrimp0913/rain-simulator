@@ -1,0 +1,10 @@
+# 本地工作目录，不发布到 GitHub
+.workbuddy/
+skills/
+
+# 本地部署脚本
+deploy.sh
+
+# 系统文件与调试残留
+.DS_Store
+.__*
