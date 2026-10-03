@@ -382,13 +382,23 @@ function addRipple(cx, cz, big){
   ripples.push({ cx, cz, t: 0, life: big ? rnd(1.7, 2.2) : rnd(1.0, 1.6), rings, seed: Math.random()*1000 });
   if (ripples.length > 46) ripples.shift();
 }
-function addSplash(x, z, n){
+function addSplash(x, z, n, sy){
   for (let i = 0; i < n; i++){
     const a = rnd(0, TAU);
-    splashes.push({ x, y: WY+0.012, z,
+    splashes.push({ x, y: sy !== undefined ? sy : WY+0.012, z,
       vx: Math.cos(a)*rnd(0.15, 0.6), vy: rnd(0.7, 1.7), vz: Math.sin(a)*rnd(0.15, 0.6),
       t: 0, life: rnd(0.28, 0.5), r: rnd(1.0, 2.4),
       white: Math.random() < 0.55 });
+  }
+}
+function addPadSplash(x, z, sy){   // 雨打荷叶：更大更白更密的水花（pad:true → 画在荷叶之上，不被叶片盖住）
+  const n = 3 + (Math.random()*4|0);
+  for (let i = 0; i < n; i++){
+    const a = rnd(0, TAU);
+    splashes.push({ x, y: sy, z, pad: true,
+      vx: Math.cos(a)*rnd(0.3, 0.95), vy: rnd(1.0, 2.1), vz: Math.sin(a)*rnd(0.3, 0.95),
+      t: 0, life: rnd(0.32, 0.58), r: rnd(2.0, 3.6),
+      white: Math.random() < 0.85 });
   }
 }
 
@@ -497,8 +507,9 @@ function drawRipples(){
   }
   ctx.restore();
 }
-function drawSplashes(){
+function drawSplashes(padPass){
   for (const s of splashes){
+    if (!!s.pad !== !!padPass) continue;   // 叶面水花与水面水花分层：叶面那层画在荷叶之上
     if (s.t >= s.life) continue;
     const k = 1 - s.t/s.life;
     const p1 = proj([s.x, s.y, s.z]);
@@ -594,10 +605,537 @@ function drawSwatches(){
   }
 }
 
+/* ---------- 池塘小动物：金鱼 / 鸭子（右上角方格开关 · 与水色自由组合） ---------- */
+let pondMode = 0;        // 0 无 · 1 金鱼 · 2 鸭子（两者互斥）
+let pondAnimT = 0, pondOn = false;   // 出现/收起的水彩扩散动画进度
+let pondHover = -1;
+
+const PAD_C = [141,170,146], PAD_D = [112,142,118], STEM_C = [104,134,110];
+
+/* 荷叶：带凹进去的圆滑咬痕缺口 + 叶脉（局部单位坐标，生成一次不闪） */
+function makePadShape(){
+  const notch = rnd(0, TAU), nw = rnd(0.50, 0.72), n = 34, pts = [];
+  for (let k = 0; k <= n; k++){
+    const a = notch + nw + (TAU - 2*nw) * k / n;
+    const dEdge = Math.min(a - notch - nw, notch + TAU - nw - a); // 距缺口两端的角距
+    // 咬痕：缺口两端向叶心凹入，往深处圆滑收拢（凹进去的弧线）
+    const dip = 1 - 0.64 * Math.pow(Math.max(0, 1 - dEdge/(nw*2.4)), 1.7);
+    const rr = (1 + rnd(-0.11, 0.11)) * dip;
+    pts.push([Math.cos(a)*rr, Math.sin(a)*rr]);
+  }
+  const veins = [];
+  for (let i = 0; i < 6; i++){
+    const a0 = notch + nw + (TAU - 2*nw) * (i + 0.5) / 6;
+    veins.push([a0, 0.15, a0 + rnd(-0.14, 0.14), rnd(0.68, 0.85)]);
+  }
+  return { pts, veins };
+}
+/* 叶杆：从池底贝塞尔弯上来（水下段 / 出水段分开存） */
+function makeStem(cx, cz, topY){
+  const bx = cx + rnd(-0.09, 0.09), bz = cz + rnd(-0.09, 0.09);
+  const mx = (bx+cx)/2 + rnd(-0.07, 0.07), mz = (bz+cz)/2 + rnd(-0.07, 0.07);
+  const below = [], above = [];
+  for (let k = 0; k <= 11; k++){
+    const t = k/11;
+    const x = (1-t)*(1-t)*bx + 2*(1-t)*t*mx + t*t*cx + rnd(-0.008, 0.008);
+    const z = (1-t)*(1-t)*bz + 2*(1-t)*t*mz + t*t*cz + rnd(-0.008, 0.008);
+    const y = BOT + 0.02 + (topY - BOT - 0.02) * t;
+    (y > 0.004 ? above : below).push([x, y, z]);
+  }
+  return { below, above, seed: rnd(0, 100) };
+}
+/* 三片荷叶：左下大（高高撑出水面）· 右上小（次高）· 右下很小无杆漂叶 */
+const pads = [
+  { cx:-0.55, cz: 0.62, r: 0.34,  y: 0.34,  stem: makeStem(-0.55,  0.62, 0.328), shape: makePadShape(), rot: rnd(0,TAU), seed: rnd(0,100) },
+  { cx: 0.56, cz:-0.60, r: 0.21,  y: 0.19,  stem: makeStem( 0.56, -0.60, 0.178), shape: makePadShape(), rot: rnd(0,TAU), seed: rnd(0,100) },
+  { cx: 0.72, cz: 0.52, r: 0.10,  y: 0.008, stem: null,                          shape: makePadShape(), rot: rnd(0,TAU), seed: rnd(0,100) },
+];
+/* 鸭子模式专属：右下角大高荷叶（鸭子绕着它转圈 · 会从叶下经过） */
+const duckPad = { cx: 0.54, cz: 0.55, r: 0.32, y: 0.30, stem: makeStem(0.54, 0.55, 0.288), shape: makePadShape(), rot: rnd(0,TAU), seed: rnd(0,100) };
+
+/* 金鱼：荷叶下两只点一下探头出去（方向随机）停住、再点游回；左上一只沿对角线往返迷你荷叶旁，中途点=流畅掉头 */
+let fishes = [];
+function makeFish(ax, az, bx, bz){
+  return { ax, az, bx, bz, at:'A', x:ax, z:az, y:-0.15, h:rnd(0,TAU), th:rnd(0,TAU),
+    swimT:1, fx:ax, fz:az, tx:ax, tz:az, dur:1.2, cruise:false, out:false,
+    phase:rnd(0,TAU), seed:rnd(0,100) };
+}
+const angDiff = (a, b) => { let d = (b - a) % TAU; if (d > Math.PI) d -= TAU; if (d < -Math.PI) d += TAU; return d; };
+function pokeShelterFish(f){
+  f.out = !f.out;                        // 探头出去 / 游回荷叶下（中途点 = 提前掉头）
+  f.fx = f.x; f.fz = f.z; f.swimT = 0;
+  if (f.out){
+    const a = rnd(0, TAU), r = rnd(0.30, 0.44);   // 游出来的方向随机
+    f.tx = Math.max(-0.82, Math.min(0.82, f.ax + Math.cos(a)*r));
+    f.tz = Math.max(-0.82, Math.min(0.82, f.az + Math.sin(a)*r));
+  } else { f.tx = f.ax; f.tz = f.az; }
+  f.th = Math.atan2(f.tz - f.fz, f.tx - f.fx);
+}
+function pokeCruiser(f){
+  f.at = (f.at === 'A') ? 'B' : 'A';     // 两端往返，中途点也是切到另一端
+  f.fx = f.x; f.fz = f.z; f.swimT = 0;
+  f.tx = f.at === 'A' ? f.ax : f.bx;
+  f.tz = f.at === 'A' ? f.az : f.bz;
+  f.th = Math.atan2(f.tz - f.fz, f.tx - f.fx);
+}
+function updFish(f, dt, now){
+  if (f.swimT < 1){
+    f.swimT = Math.min(1, f.swimT + dt/f.dur);
+    const e = f.swimT*f.swimT*(3 - 2*f.swimT);
+    f.x = f.fx + (f.tx - f.fx)*e; f.z = f.fz + (f.tz - f.fz)*e;
+    f.h += angDiff(f.h, f.th) * Math.min(1, dt*6);   // 朝向平滑过渡，掉头不生硬
+    f.phase += dt * (f.cruise ? 6.5 : 9);
+  } else {
+    f.x = f.tx + Math.sin(now*0.4 + f.seed)*0.012;   // 停下后几乎不动，只轻轻浮沉
+    f.z = f.tz + Math.cos(now*0.33 + f.seed*1.31)*0.012;
+    f.h += Math.sin(now*0.5 + f.seed*2.1)*0.3*dt;
+    f.phase += dt*1.8;
+  }
+  f.y = -0.15 + Math.sin(now*0.9 + f.seed*3.7)*0.012; // 轻轻浮沉
+}
+
+/* 鸭子：绕整个方形底座转圈（圆角方形轨道 · 略不规则 · 不碰壁），点一下平滑加速一小段 */
+const duck = { s: 0, th: 0, boost: 0, spd: 0, phase: 0, x: 0, z: 0.03, h: 0, wake: 0.4 };
+function duckPath(th){                                  // 圆角方形（超椭圆 n=3）+ 轻微不规则
+  const a = 0.74 + 0.035*Math.sin(2*th + 1.3) + 0.02*Math.sin(3*th + 4.1);
+  const c = Math.cos(th), s = Math.sin(th);
+  const sp = (v) => Math.sign(v)*Math.pow(Math.abs(v), 2/3);   // 指数 3 → 方中带圆
+  return [sp(c)*a, sp(s)*a];
+}
+/* 弧长参数化：沿轨道恒定世界速度（超椭圆参数角在边中点速度趋于无穷，直接用会忽快忽慢） */
+const DUCK_ARC = (function(){
+  const N = 2880, cum = [0];
+  let prev = duckPath(0);
+  for (let k = 1; k <= N; k++){
+    const p = duckPath(k/N*TAU);
+    cum.push(cum[k-1] + Math.hypot(p[0]-prev[0], p[1]-prev[1]));
+    prev = p;
+  }
+  return cum;
+})();
+function duckTheta(s){
+  const L = DUCK_ARC[DUCK_ARC.length-1];
+  const d = ((s % L) + L) % L;
+  let lo = 0, hi = DUCK_ARC.length - 1;
+  while (hi - lo > 1){ const mid = (lo + hi) >> 1; if (DUCK_ARC[mid] <= d) lo = mid; else hi = mid; }
+  const seg = Math.max(1e-9, DUCK_ARC[lo+1] - DUCK_ARC[lo]);
+  return (lo + (d - DUCK_ARC[lo])/seg) / (DUCK_ARC.length-1) * TAU;
+}
+function pokeDuck(){
+  duck.boost = Math.min(1.5, duck.boost + 0.4);    // 目标速度抬一小档，实际速度平滑追上去
+}
+function updDuck(dt){
+  duck.boost = Math.max(0, duck.boost - dt*0.35);  // 目标速度缓落
+  duck.spd += (duck.boost - duck.spd)*Math.min(1, dt*1.8);   // 点下立刻开始渐快/渐缓，无跳变
+  duck.s += (0.24 + duck.spd)*dt;                  // 沿轨道推进（弧长 → 恒定速度）
+  duck.th = duckTheta(duck.s);
+  const p = duckPath(duck.th), p2 = duckPath(duckTheta(duck.s + 0.05));
+  duck.x = p[0]; duck.z = p[1];
+  duck.h = Math.atan2(p2[1] - p[1], p2[0] - p[0]);  // 朝轨迹切线方向
+  duck.phase += dt*(1.3 + duck.spd*1.8);
+  duck.wake -= dt;
+  if (duck.wake <= 0){                              // 身后拖一串尾流涟漪
+    duck.wake = 0.55 - duck.spd*0.18;
+    addRipple(duck.x - Math.cos(duck.h)*0.14, duck.z - Math.sin(duck.h)*0.14, false);
+  }
+}
+function updPond(dt, now){
+  if (pondMode === 1) for (const f of fishes) updFish(f, dt, now);
+  else if (pondMode === 2) updDuck(dt, now);
+}
+
+/* ---------- 小动物 sprite（三渲二：世界坐标定位 · 朝向随投影 · 钢笔勾线 + 水彩体积） ---------- */
+function fishOutline(phase){
+  const sway = Math.sin(phase)*0.22, tb = [-0.30, 0];
+  const c = Math.cos(sway), s2 = Math.sin(sway);
+  const rot = p => [tb[0] + (p[0]-tb[0])*c - (p[1]-tb[1])*s2, tb[1] + (p[0]-tb[0])*s2 + (p[1]-tb[1])*c];
+  const tail = [[-0.50,0.21],[-0.615,0.10],[-0.655,0],[-0.615,-0.10],[-0.50,-0.21]].map(rot);
+  return [[0.52,0],[0.42,0.115],[0.22,0.165],[0.02,0.163],[-0.20,0.115],[-0.30,0.055]]
+    .concat(tail, [[-0.30,-0.055],[-0.20,-0.115],[0.02,-0.163],[0.22,-0.165],[0.42,-0.115]]);
+}
+function drawFishSprite(c, ang, s, phase, seed, Pw, k, icon){
+  const tp = (x, y) => [c[0] + (x*Math.cos(ang) - y*Math.sin(ang))*s, c[1] + (x*Math.sin(ang) + y*Math.cos(ang))*s];
+  const mix = cc => icon ? cc : mixC(cc, Pw.W, k);
+  const base = fishOutline(phase);
+  const P = base.map((p, i) => {
+    const q = tp(p[0], p[1]);
+    return [q[0] + (hash(seed*3.1 + i*13.7) - 0.5)*0.016*s, q[1] + (hash(seed*5.3 + i*7.1) - 0.5)*0.016*s]; // 手绘抖动
+  });
+  const FC = mix([219,127,78]), FD = mix([194,101,62]), FM = mix([207,114,71]), FL = mix([240,180,130]);
+  fillPoly(P, FC, icon ? 0.9 : 0.82, true);
+  fillPoly([[-0.28,0.14],[0.0,0.16],[0.14,0.07],[0.14,-0.07],[0.0,-0.16],[-0.28,-0.14]].map(p => tp(p[0],p[1])), FD, 0.4, false);
+  fillPoly([[0.52,0],[0.44,0.10],[0.32,0.115],[0.30,0],[0.32,-0.115],[0.44,-0.10]].map(p => tp(p[0],p[1])), FM, 0.38, false);
+  fillPoly([[0.36,0.05],[0.10,0.07],[-0.12,0.05],[-0.12,-0.05],[0.10,-0.07],[0.36,-0.05]].map(p => tp(p[0],p[1])), FL, 0.45, false);
+  for (const sgn of [1, -1]){
+    const fin = [[0.02,0.15],[0.11,0.27],[0.24,0.22],[0.19,0.12]].map(p => tp(p[0], p[1]*sgn));
+    fillPoly(fin, FC, 0.5, false);
+    pen(fin, INK, 0.9, icon ? 0.75 : 0.5, seed + sgn*31, 0.15, false);
+  }
+  pen(P, INK, 1.2, icon ? 0.85 : 0.6, seed*3.3, 0.05, false);
+  ctx.fillStyle = `rgba(${INK[0]},${INK[1]},${INK[2]},${icon ? 0.85 : 0.62})`;
+  for (const sgn of [1, -1]){
+    const e = tp(0.355, 0.088*sgn);
+    ctx.beginPath(); ctx.arc(e[0], e[1], 0.030*s, 0, TAU); ctx.fill();
+  }
+}
+/* ---------- 3D 橡胶玩具鸭（真网格 · 任意视角都是正确角度） ---------- */
+const DUCK_S = 0.42;                    // 世界缩放：鸭身全长约 0.34
+const DUCK_V = [], DUCK_F = [];
+(function buildDuck(){
+  const add = (x, y, z) => { DUCK_V.push([x, y, z]); return DUCK_V.length - 1; };
+  // 身体：沿 x 放样（尾根上翘 · 背圆 · 腹饱满 · 收胸）
+  const X  = [-0.345, -0.26, -0.16, -0.04, 0.08, 0.18, 0.27];
+  const CY = [ 0.115,  0.072, 0.042, 0.030, 0.032, 0.046, 0.074];
+  const RY = [ 0.052,  0.094, 0.122, 0.130, 0.120, 0.098, 0.064];
+  const RZ = [ 0.056,  0.110, 0.152, 0.166, 0.150, 0.116, 0.070];
+  const NA = 10, rings = [];
+  for (let i = 0; i < X.length; i++){
+    const ring = [];
+    for (let j = 0; j <= NA; j++){
+      const t = j/NA*TAU;
+      ring.push(add(X[i], CY[i] + RY[i]*Math.sin(t), RZ[i]*Math.cos(t)));
+    }
+    rings.push(ring);
+  }
+  for (let i = 0; i < rings.length - 1; i++)
+    for (let j = 0; j < NA; j++)
+      DUCK_F.push({ v:[rings[i][j], rings[i][j+1], rings[i+1][j+1], rings[i+1][j]], kind:'body',
+        ref:[(X[i]+X[i+1])/2, (CY[i]+CY[i+1])/2, 0] });          // 放样轴上的内点
+  const capT = add(X[0]-0.012, CY[0]+0.012, 0), capF = add(X[6]+0.012, CY[6], 0);
+  for (let j = 0; j < NA; j++){
+    DUCK_F.push({ v:[rings[0][j], capT, rings[0][j+1]], kind:'body', ref:[X[0], CY[0], 0] });
+    DUCK_F.push({ v:[rings[6][j], rings[6][j+1], capF], kind:'body', ref:[X[6], CY[6], 0] });
+  }
+  // 经纬小球（头 / 尾尖 / 嘴通用，ref = 球心）
+  function blob(cx, cy, cz, rx, ry, rz, kind, stacks, slices){
+    const rs = [];
+    for (let i = 0; i <= stacks; i++){
+      const ph = -Math.PI/2 + Math.PI*i/stacks, ring = [];
+      for (let j = 0; j <= slices; j++){
+        const th = j/slices*TAU;
+        ring.push(add(cx + rx*Math.cos(ph)*Math.cos(th), cy + ry*Math.sin(ph), cz + rz*Math.cos(ph)*Math.sin(th)));
+      }
+      rs.push(ring);
+    }
+    for (let i = 0; i < stacks; i++)
+      for (let j = 0; j < slices; j++)
+        DUCK_F.push({ v:[rs[i][j], rs[i][j+1], rs[i+1][j+1], rs[i+1][j]], kind, ref:[cx, cy, cz] });
+  }
+  blob(-0.345, 0.165, 0, 0.055, 0.048, 0.048, 'body', 3, 6);     // 上翘尾尖
+  blob( 0.265, 0.185, 0, 0.105, 0.105, 0.105, 'body', 5, 8);     // 圆头
+  blob( 0.400, 0.150, 0, 0.085, 0.024, 0.064, 'beak', 2, 6);     // 宽扁嘴
+  // 双侧眼睛（小圆片 · 哪面看都有一只对的）
+  for (const sgn of [1, -1]){
+    const d = norm3([0.52, 0.34, 0.79*sgn]);
+    const a1 = norm3(cross([0,1,0], d)), a2 = cross(d, a1);
+    const c = [0.265 + d[0]*0.098, 0.185 + d[1]*0.098, d[2]*0.098], v = [];
+    for (let j = 0; j < 7; j++){
+      const t = j/7*TAU, ct = Math.cos(t), st = Math.sin(t);
+      v.push(add(c[0] + (a1[0]*ct + a2[0]*st)*0.017, c[1] + (a1[1]*ct + a2[1]*st)*0.017, c[2] + (a1[2]*ct + a2[2]*st)*0.017));
+    }
+    DUCK_F.push({ v, kind:'eye', ref:[c[0] - d[0]*0.05, c[1] - d[1]*0.05, c[2] - d[2]*0.05] });
+  }
+  // 双侧翅膀（贴身水彩暗块）
+  const bodyAt = x => {
+    let i = 0;
+    while (i < X.length-2 && x > X[i+1]) i++;
+    const t = (x - X[i]) / (X[i+1] - X[i]), L = (a, b) => a + (b - a)*t;
+    return [L(CY[i], CY[i+1]), L(RY[i], RY[i+1]), L(RZ[i], RZ[i+1])];
+  };
+  for (const sgn of [1, -1]){
+    const prof = [[-0.24,0.50],[-0.06,0.66],[0.10,0.60],[0.17,0.34],[0.06,0.02],[-0.14,0.08]];
+    const wp = prof.map(([x, f]) => {
+      const [cy, ry, rz] = bodyAt(x);
+      return add(x, cy + ry*f, (rz*0.99 + 0.006)*sgn);
+    });
+    DUCK_F.push({ v: wp, kind:'wing', ref:[0, 0.04, 0] });   // 身体轴线内点
+  }
+  // 面索引 + 顶点在面内的位置（供侧影提取）
+  DUCK_F.forEach((f, i) => {
+    f.idx = i;
+    f.vk = {};
+    f.v.forEach((vi, k) => { f.vk[vi] = k; });
+  });
+})();
+/* 侧影棱：可见面与不可见面共享的边 = 真实轮廓（内部棱不画 → 表面光滑，只留翅膀凸起） */
+const DUCK_E = [];
+(function(){
+  const m = new Map();
+  DUCK_F.forEach((f, i) => {
+    if (f.kind === 'eye' || f.kind === 'wing') return;
+    for (let k = 0; k < f.v.length; k++){
+      const a = f.v[k], b = f.v[(k+1)%f.v.length];
+      const key = a < b ? a*10000 + b : b*10000 + a;
+      if (m.has(key)) m.get(key).f2 = i;
+      else m.set(key, { a: Math.min(a, b), b: Math.max(a, b), f1: i, f2: -1 });
+    }
+  });
+  for (const e of m.values()) DUCK_E.push(e);
+})();
+/* 变换到世界 + 投影 + 画家排序（外向法线 → 连续受光 · 稳定排序防闪面） */
+function duckFaces(wx, wy, wz, h, roll, sc, projFn, vd){
+  const ch = Math.cos(h), sh = Math.sin(h), cr = Math.cos(roll), sr = Math.sin(roll);
+  const list = [], rec = [];
+  for (const f of DUCK_F){
+    const P = [], W3 = [];
+    let depth = 0, ok = true;
+    for (const vi of f.v){
+      const v = DUCK_V[vi];
+      const y1 = v[1]*cr - v[2]*sr, z1 = v[1]*sr + v[2]*cr;   // 绕前进轴轻晃
+      const lx = v[0]*DUCK_S*sc, ly = y1*DUCK_S*sc, lz = z1*DUCK_S*sc;
+      const p3 = [wx + lx*ch - lz*sh, wy + ly, wz + lx*sh + lz*ch];
+      const p = projFn(p3);
+      if (!p){ ok = false; break; }
+      W3.push(p3); P.push(p); depth += p[2];
+    }
+    if (!ok){ rec[f.idx] = null; continue; }
+    let nn = norm3(cross(sub(W3[1], W3[0]), sub(W3[2], W3[0])));
+    let fc = [0, 0, 0];
+    for (const p of W3){ fc[0]+=p[0]; fc[1]+=p[1]; fc[2]+=p[2]; }
+    fc = [fc[0]/W3.length, fc[1]/W3.length, fc[2]/W3.length];
+    const r0 = f.ref || [0, 0.04, 0];                       // 该面所属部件的内点（头/嘴/身各自正确）
+    const ry1 = r0[1]*cr - r0[2]*sr, rz1 = r0[1]*sr + r0[2]*cr;
+    const ref3 = [wx + (r0[0]*DUCK_S*sc)*ch - (rz1*DUCK_S*sc)*sh, wy + ry1*DUCK_S*sc, wz + (r0[0]*DUCK_S*sc)*sh + (rz1*DUCK_S*sc)*ch];
+    if (dot(nn, sub(fc, ref3)) < 0) nn = [-nn[0], -nn[1], -nn[2]]; // 保证外向
+    const it = { P, d: depth/f.v.length, kind: f.kind, f, ny: nn[1], vis: dot(nn, vd) < 0 };
+    rec[f.idx] = it;
+    list.push(it);
+  }
+  list.sort((a, b) => (b.d - a.d) || (a.f.idx - b.f.idx));   // 深度相同时按面索引 → 帧间稳定不闪
+  for (let i = 0; i < DUCK_E.length; i++){                  // 轮廓边分给持有它的可见面（随面画，会被更近的面盖住）
+    const e = DUCK_E[i];
+    if (e.f2 < 0) continue;                                 // 边界边（眼/翅贴片）→ 不描
+    const o1 = rec[e.f1], o2 = rec[e.f2];
+    if (!o1 || !o2 || o1.vis === o2.vis) continue;
+    const o = o1.vis ? o1 : o2;
+    const pa = o.P[o.f.vk[e.a]], pb = o.P[o.f.vk[e.b]];
+    if (pa && pb) (o.edges = o.edges || []).push([pa, pb, i]);
+  }
+  return { list, rec };
+}
+/* 上色：纯白不透明，受光只做极轻的连续明暗；轮廓边随所属面一起画（近处部件盖住远处部件的线） */
+function paintDuckFaces(list, Pw, sc, icon, fl){
+  for (const it of list){
+    if (it.kind === 'eye'){
+      let cx = 0, cy = 0;
+      for (const p of it.P){ cx += p[0]; cy += p[1]; }
+      cx /= it.P.length; cy /= it.P.length;
+      const r = Math.max(0.6, 0.017*DUCK_S*sc*fl/it.d);
+      ctx.fillStyle = `rgba(${INK[0]},${INK[1]},${INK[2]},${icon ? 0.9 : 0.8})`;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.fill();
+      continue;
+    }
+    const t = Math.max(0, Math.min(1, (it.ny + 0.6)/1.2));   // 底微暗 → 顶纯白 连续过渡
+    if (it.kind === 'beak') fillPoly(it.P, mixC([209,156,70], [233,181,86], t), 1, false);
+    else if (it.kind === 'wing') fillPoly(it.P, mixC([236,234,229], [255,254,252], t), 1, false);
+    else fillPoly(it.P, mixC([233,231,226], [255,254,252], t), 1, false);
+    if (it.edges) for (const eg of it.edges)                 // 画完立即描这条面的轮廓边
+      pen([eg[0], eg[1]], INK, 1.35, icon ? 0.85 : 0.72, eg[2]*3.71 + 7, 0.06, false);
+  }
+}
+function drawDuck3D(x, y, z, h, roll, Pw, sc){
+  if (sc <= 0.02) return;
+  const { list, rec } = duckFaces(x, y, z, h, roll, sc, proj, Fv);
+  const c0 = proj([x, WY + 0.006, z]);                        // 水面柔和阴影
+  if (c0){
+    ctx.beginPath();
+    ctx.ellipse(c0[0] + 2.5*SC, c0[1] + 3*SC, 0.16*focal/c0[2]*sc, 0.11*focal/c0[2]*sc, 0, 0, TAU);
+    ctx.fillStyle = 'rgba(115,128,136,0.10)';
+    ctx.fill();
+  }
+  paintDuckFaces(list, Pw, sc, false, focal);   // 轮廓边已随面画（paintDuckFaces 内）
+}
+/* 方格图标：同一只网格鸭，换一台固定 3/4 视角小相机 */
+function drawDuckIcon(cx, cy, s){
+  const F = norm3([0.30, 0.40, 0.87]);   // 侧 3/4 视角：看到侧面轮廓 + 一点正面
+  const R = norm3(cross(F, [0,1,0])), U = cross(R, F);
+  const D = 2.6, fl = D*s*2.3;
+  const eye3 = [-F[0]*D, -F[1]*D, -F[2]*D];
+  const projFn = p => {
+    const v = [p[0]-eye3[0], p[1]-eye3[1], p[2]-eye3[2]];
+    const d = dot(v, F);
+    if (d < 0.1) return null;
+    return [cx + dot(v, R)/d*fl, cy - dot(v, U)/d*fl, d];
+  };
+  const list2 = duckFaces(0, 0, 0, 0.12, 0, 1, projFn, F);
+  paintDuckFaces(list2.list, null, 1, true, fl);   // 轮廓边已随面画
+}
+
+/* ---------- 池塘绘制（水下层 → 水面层分开，涟漪夹中间） ---------- */
+function drawPadLeaf(pd, rEff, now){
+  const pc = proj([pd.cx, pd.y, pd.cz]);
+  if (!pc) return;
+  const rot = pd.rot + Math.sin(now*0.4 + pd.seed)*0.035;   // 缓慢随性摆
+  const cs = Math.cos(rot), sn = Math.sin(rot);
+  const pts = pd.shape.pts.map(p => proj([pd.cx + (p[0]*cs - p[1]*sn)*rEff, pd.y, pd.cz + (p[0]*sn + p[1]*cs)*rEff]));
+  if (pts.some(p => !p)) return;
+  fillPoly(pts, PAD_C, 0.8, true);          // 平涂水彩
+  fillPoly(pts.map(p => [pc[0] + (p[0]-pc[0])*0.74 + 2*SC, pc[1] + (p[1]-pc[1])*0.74 + 1.5*SC]), PAD_D, 0.22, false);
+  for (const v of pd.shape.veins){
+    const a0 = v[0] + rot, a1 = v[2] + rot;
+    const p0 = proj([pd.cx + Math.cos(a0)*v[1]*rEff, pd.y + 0.002, pd.cz + Math.sin(a0)*v[1]*rEff]);
+    const p1 = proj([pd.cx + Math.cos(a1)*v[3]*rEff, pd.y + 0.002, pd.cz + Math.sin(a1)*v[3]*rEff]);
+    if (p0 && p1) pen([p0, p1], PAD_D, 0.9, 0.3, pd.seed + v[0]*57, 0.25, false);
+  }
+  pen(pts, INK, 1.4, 0.78, pd.seed*7.7, 0.05, false);   // 整圈勾边（含凹进去的缺口）
+  if (pd.stem){
+    ctx.fillStyle = 'rgba(62,48,38,0.45)';
+    ctx.beginPath(); ctx.arc(pc[0], pc[1], 1.9*SC, 0, TAU); ctx.fill();
+  }
+}
+function drawPondBelow(now){
+  if (pondMode === 0) return;
+  const sA = easeW(pondAnimT);
+  if (sA <= 0.004) return;
+  const Pw = curWaterPal();
+  const lum = Pw.W[0]*0.3 + Pw.W[1]*0.59 + Pw.W[2]*0.11;
+  const k = lum < 110 ? 0.13 : 0.28;   // 深色水下少混一点，金鱼仍看得见
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, sA*1.4);   // 水彩扩散般浮现
+  const padList = pondMode === 1 ? pads : [duckPad];
+  for (const pd of padList){
+    if (!pd.stem) continue;
+    const st = pd.stem;
+    if (st.below.length > 1){
+      const b = st.below.map(proj);
+      if (b.every(p => p)) pen(b, mixC([92,122,99], Pw.W, k), 1.8, 0.45, st.seed, 0.1, false);
+    }
+  }
+  if (pondMode === 1){
+    for (const f of fishes){
+      const c = proj([f.x, f.y, f.z]); if (!c) continue;
+      const hh = proj([f.x + Math.cos(f.h)*0.12, f.y, f.z + Math.sin(f.h)*0.12]);
+      const ang = hh ? Math.atan2(hh[1]-c[1], hh[0]-c[0]) : 0;
+      drawFishSprite(c, ang, 0.145*focal/c[2]*sA, f.phase, f.seed, Pw, k, false);
+    }
+  }
+  ctx.restore();
+}
+function drawPondAbove(now){
+  const sA = easeW(pondAnimT);
+  if (sA <= 0.004) return;
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, sA*1.4);   // 水彩扩散般浮现
+  if (pondMode === 1){
+    // 出水叶杆：画在涟漪之上（杆高出水面，涟漪不该盖住它）
+    for (const pd of pads){
+      if (!pd.stem || pd.stem.above.length < 2) continue;
+      const a = pd.stem.above.map(proj);
+      if (a.every(p => p)) pen(a, [88,118,94], 2.8, 0.78, pd.stem.seed + 9, 0.08, false);
+    }
+    for (const pd of pads){
+      const useClip = pd.y < 0.02;              // 只有贴水漂叶才裁剪进水面；高杆荷叶整体在水上
+      if (useClip){ ctx.save(); clipQuad(wi.map(proj)); }
+      drawPadLeaf(pd, pd.r*sA, now);
+      if (useClip) ctx.restore();
+    }
+  } else if (pondMode === 2){
+    // 右下角大荷叶：杆 → 鸭子 → 叶片（叶子最后画，从上面看鸭子就在叶下）
+    const a = duckPad.stem.above.map(proj);
+    if (a.every(p => p)) pen(a, [88,118,94], 2.8, 0.78, duckPad.stem.seed + 9, 0.08, false);
+    const Pw = curWaterPal();
+    const bob = Math.sin(duck.phase)*0.005;
+    const roll = Math.sin(duck.phase*0.9)*0.045;   // 游动时轻晃
+    drawDuck3D(duck.x, WY + 0.030 + bob, duck.z, duck.h, roll, Pw, sA);
+    drawPadLeaf(duckPad, duckPad.r*sA, now);
+  }
+  ctx.restore();
+}
+
+/* ---------- 右上角两个方格按钮（比色板大 · 钢笔手绘同款） ---------- */
+const pondBtnShapes = [];
+for (let i = 0; i < 2; i++){
+  const pts = [];
+  const cs = [[-0.5,-0.5],[0.5,-0.5],[0.5,0.5],[-0.5,0.5]];
+  for (let e = 0; e < 4; e++){
+    const a = cs[e], b = cs[(e+1)%4];
+    for (let k = 0; k < 4; k++){
+      const t = k/4;
+      pts.push([a[0]+(b[0]-a[0])*t + rnd(-0.04,0.04), a[1]+(b[1]-a[1])*t + rnd(-0.04,0.04)]);
+    }
+  }
+  pts.push(pts[0]);
+  pondBtnShapes.push(pts);
+}
+const PB_BASE = 46, PB_GAP = 16, PB_M = 26;
+function pondBtnPos(i){
+  const act = pondOn && pondMode === i+1, hov = pondHover === i;
+  return {
+    cx: W - (PB_M + PB_BASE/2 + (1-i)*(PB_BASE + PB_GAP))*SC,
+    cy: (PB_M + PB_BASE/2 + 6)*SC,
+    s: (act ? 54 : (hov ? 50 : PB_BASE))*SC
+  };
+}
+function drawPondBtns(){
+  for (let i = 0; i < 2; i++){
+    const { cx, cy, s } = pondBtnPos(i);
+    const act = pondOn && pondMode === i+1;
+    const pts = pondBtnShapes[i].map(p => [cx + p[0]*s, cy + p[1]*s]);
+    ctx.fillStyle = `rgba(246,241,230,${act ? 0.96 : 0.82})`;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let k = 1; k < pts.length; k++) ctx.lineTo(pts[k][0], pts[k][1]);
+    ctx.closePath();
+    ctx.fill();
+    ctx.save();
+    ctx.translate(1.6*SC, 1.2*SC);
+    ctx.fillStyle = `rgba(246,241,230,${act ? 0.4 : 0.3})`;
+    ctx.fill();
+    ctx.restore();
+    pen(pts, INK, act ? 2.0 : 1.5, act ? 0.92 : 0.72, 91.3 + i*43.7, 0.04);
+    if (i === 0) drawFishSprite([cx - 1.5*SC, cy + 0.5*SC], -0.42, s*0.40, 1.35, 3.7, null, 0, true);
+    else          drawDuckIcon(cx, cy, s*0.85);
+    if (act) pen([[cx-11*SC, cy + s*0.62 + 8*SC],[cx+11*SC, cy + s*0.62 + 8*SC]], INK, 1.6, 0.72, i*17.3, 0);
+  }
+}
+function hitPondBtn(px, py){
+  for (let i = 0; i < 2; i++){
+    const { cx, cy, s } = pondBtnPos(i);
+    if (Math.abs(px - cx) < s*0.62 && Math.abs(py - cy) < s*0.62) return i;
+  }
+  return -1;
+}
+function hitPondAnimal(px, py){
+  if (pondMode === 1){
+    for (let i = 0; i < fishes.length; i++){
+      const f = fishes[i];
+      const p = proj([f.x, f.y, f.z]);
+      if (!p) continue;
+      const s = 0.145*focal/p[2];
+      if (Math.hypot(px - p[0], py - p[1]) < s*0.75) return { t: 1, i };
+    }
+  } else if (pondMode === 2){
+    const p = proj([duck.x, WY + 0.05, duck.z]);
+    if (p){
+      const s = 0.24*focal/p[2];
+      if (Math.hypot(px - p[0], py - p[1]) < s) return { t: 2 };
+    }
+  }
+  return null;
+}
+function spawnFishes(){
+  fishes = [
+    makeFish(pads[0].cx + rnd(-0.03,0.03), pads[0].cz + rnd(-0.03,0.03), null, null),  // 左下荷叶下
+    makeFish(pads[1].cx + rnd(-0.03,0.03), pads[1].cz + rnd(-0.03,0.03), null, null),  // 右上荷叶下
+    makeFish(-0.58, -0.52, 0.56, 0.40),                                                // 左上角 · 对角线往返迷你荷叶旁
+  ];
+  fishes[2].dur = 2.8; fishes[2].cruise = true;
+}
+function togglePond(i){
+  if (pondMode === i+1 && pondOn){ pondOn = false; return; }   // 收起（水彩般淡出）
+  pondMode = i+1; pondOn = true;
+  pondAnimT = Math.min(pondAnimT, 0.12);                       // 从头水彩扩散浮现
+  if (pondMode === 1) spawnFishes();
+  else if (pondMode === 2){
+    duck.s = 0; duck.th = 0; duck.boost = 0; duck.spd = 0; duck.phase = 0; duck.wake = 0.4;
+  }
+}
+
 /* ---------- 主循环 ---------- */
 let lastT = 0, interacted = false;
 function frame(now){
   const dt = Math.min(0.033, (now - lastT)/1000 || 0.016);
+  const nowS = now/1000;
   lastT = now;
   if (!interacted) cam.theta += dt * 0.045; // 初始极慢自转，一触即停
   updCam();
@@ -608,6 +1146,17 @@ function frame(now){
     d.y += wind[1]*d.spd*dt;
     d.x += wind[0]*d.spd*dt;
     d.z += wind[2]*d.spd*dt;
+    // 先查荷叶平面：雨在高处就被叶片接住，在叶面上炸水花（不生涟漪、不打到水面）
+    const ap = pondMode === 1 ? pads : (pondMode === 2 ? [duckPad] : null);
+    if (ap){
+      const pd = ap.find(p => Math.hypot(d.x - p.cx, d.z - p.cz) < p.r*0.9);
+      if (pd && d.y <= pd.y + 0.014){
+        if (Math.abs(d.x) < OH+0.16 && Math.abs(d.z) < OH+0.16 && Math.random() < 0.85)
+          addPadSplash(d.x, d.z, pd.y + 0.016);
+        respawn(d, false);
+        continue;
+      }
+    }
     if (d.y <= WY){
       if (Math.abs(d.x) < WH && Math.abs(d.z) < WH){ // 整块顶面都是水
         if (Math.random() < 0.7) addRipple(d.x, d.z, false);
@@ -627,6 +1176,9 @@ function frame(now){
     s.x += s.vx*dt; s.y += s.vy*dt; s.z += s.vz*dt;
     if (s.t >= s.life) splashes.splice(i, 1);
   }
+  updPond(dt, nowS);
+  pondAnimT = Math.max(0, Math.min(1, pondAnimT + (pondOn ? dt/0.9 : -dt/0.45))); // 水彩扩散出现/收起
+  if (!pondOn && pondAnimT <= 0 && pondMode !== 0) pondMode = 0;  // 淡出结束后清空场景（期间保留绘制供渐隐）
 
   // --- 绘制 ---
   ctx.clearRect(0, 0, W, H);
@@ -659,6 +1211,7 @@ function frame(now){
   faces.push({ d: depthOf([0, WY, 0]), fn: drawWater });
   faces.sort((a, b) => b.d - a.d);
   for (const f of faces) f.fn();
+  drawPondBelow(nowS);   // 叶杆 + 金鱼（水下层，在涟漪之下）
 
   // 近处钢笔棱线（可见面相邻的棱一定可见）
   for (const e of edgeDefs){
@@ -668,10 +1221,13 @@ function frame(now){
     pen(pts, INK, e.w, e.al, e.id.length*37 + e.pts[0][0]*13, 0.05);
   }
   drawRipples();
-  drawSplashes();
+  drawSplashes(false);
+  drawPondAbove(nowS);   // 荷叶 / 鸭子（水面层，在涟漪之上）
+  drawSplashes(true);    // 叶面上的水花最后画（俯视时不再被荷叶盖住）
   // 近处的雨
   for (const d of nearRain) drawDrop(d);
   drawSwatches();
+  drawPondBtns();
   requestAnimationFrame(frame);
 }
 
@@ -683,6 +1239,14 @@ cv.addEventListener('pointerdown', e => {
   initAudio();
   const sw = hitSwatch(e.clientX, e.clientY);
   if (sw >= 0){ switchTheme(sw); return; }   // 点色板：只换色，不动相机、不生涟漪
+  const pb = hitPondBtn(e.clientX, e.clientY);
+  if (pb >= 0){ togglePond(pb); plip(); return; }   // 点右上角方格：放 / 收小动物
+  const pa = hitPondAnimal(e.clientX, e.clientY);
+  if (pa){
+    if (pa.t === 1){ const f = fishes[pa.i]; if (f.cruise) pokeCruiser(f); else pokeShelterFish(f); }
+    else pokeDuck();
+    plip(); return;
+  }
   cv.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 1){
@@ -695,11 +1259,13 @@ cv.addEventListener('pointerdown', e => {
   }
 });
 cv.addEventListener('pointermove', e => {
-  if (!pointers.size){ // 非拖拽时：色板悬停检测
+  if (!pointers.size){ // 非拖拽时：色板 / 池塘按钮 / 小动物悬停检测
     const h = hitSwatch(e.clientX, e.clientY);
-    if (h !== hoverIdx){
-      hoverIdx = h;
-      cv.style.cursor = h >= 0 ? 'pointer' : '';
+    const pb = h < 0 ? hitPondBtn(e.clientX, e.clientY) : -1;
+    const pa = (h < 0 && pb < 0) ? hitPondAnimal(e.clientX, e.clientY) : null;
+    if (h !== hoverIdx || pb !== pondHover){
+      hoverIdx = h; pondHover = pb;
+      cv.style.cursor = (h >= 0 || pb >= 0 || pa) ? 'pointer' : '';
     }
   }
   if (!pointers.has(e.pointerId)) return;
