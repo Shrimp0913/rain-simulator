@@ -398,6 +398,23 @@ function addRipple(cx, cz, big){
   ripples.push({ cx, cz, t: 0, life: big ? rnd(1.7, 2.2) : rnd(1.0, 1.6), rings, seed: Math.random()*1000 });
   if (ripples.length > 46) ripples.shift();
 }
+function addTapRipple(cx, cz){
+  // 点击水面：2~3 圈很大的纯白同心涟漪，比雨滴涟漪大得多，
+  // 匀速慢扩、长持续、平滑淡入淡出（不突兀）
+  const nRings = 2 + (Math.random() < 0.5 ? 1 : 0);
+  const rings = [];
+  const base = rnd(0.68, 0.92);                   // 最大一圈（雨滴涟漪为 0.10~0.22）
+  for (let k = 0; k < nRings; k++){
+    const jit = [];
+    for (let j = 0; j < 18; j++) jit.push([rnd(0, 0.35), rnd(-0.12, 0.12)]);
+    rings.push({ delay: k*rnd(0.22, 0.34),
+      maxR: base * (1 - k*rnd(0.3, 0.42)),        // 外圈最大，内圈约 6 成、再内圈约 2~4 成
+      jit, w: rnd(1.8, 2.6), am: rnd(0.42, 0.58),
+      c: pal.SP_W });                             // 纯白
+  }
+  ripples.push({ cx, cz, t: 0, life: rnd(4.4, 5.4), rings, seed: Math.random()*1000, tap: true });
+  if (ripples.length > 46) ripples.shift();
+}
 function addSplash(x, z, n, sy){
   for (let i = 0; i < n; i++){
     const a = rnd(0, TAU);
@@ -497,8 +514,8 @@ function drawRipples(){
   ctx.save();
   clipQuad(q); // 涟漪环裁剪在水面勾边内
   for (const rp of ripples){
-    // 撞击点：落水瞬间的一个深色小点（真实反馈）
-    if (rp.t < 0.16){
+    // 撞击点：落水瞬间的一个深色小点（真实反馈，仅雨滴；点击涟漪不需要）
+    if (rp.t < 0.16 && !rp.tap){
       const pc = proj([rp.cx, WY + 0.006, rp.cz]);
       if (pc){
         ctx.fillStyle = `rgba(${pal.SP_D[0]},${pal.SP_D[1]},${pal.SP_D[2]},${Math.min(1, 0.95*(1 - rp.t/0.16))})`;
@@ -508,13 +525,24 @@ function drawRipples(){
     for (const ring of rp.rings){
       const t = (rp.t - ring.delay) / rp.life;
       if (t < 0 || t > 1) continue;
-      const r = ring.maxR * (1 - (1-t)*(1-t));
-      const alpha = Math.min(1, 1.15 * (1 - t));
+      let r, alpha;
+      if (rp.tap){
+        // 点击涟漪：匀速慢扩 + 平滑淡入淡出（smoothstep，两端零斜率，消失不突兀）
+        const tt = Math.min(1, Math.max(0, t));
+        r = ring.maxR * tt;
+        const fadeOut = 1 - tt*tt*(3 - 2*tt);
+        const fadeIn = Math.min(1, tt/0.1);
+        alpha = ring.am * fadeIn * fadeOut;
+      } else {
+        r = ring.maxR * (1 - (1-t)*(1-t));
+        alpha = Math.min(1, 1.15 * (1 - t));
+      }
+      const rcx = rp.cx + (ring.ox || 0), rcz = rp.cz + (ring.oz || 0);
       const pts = [];
       for (let k = 0; k < 18; k++){
         const a = k/18*TAU + ring.jit[k][0];
         const rr = r * (1 + ring.jit[k][1]);
-        const p = proj([rp.cx + Math.cos(a)*rr, WY + 0.004, rp.cz + Math.sin(a)*rr]);
+        const p = proj([rcx + Math.cos(a)*rr, WY + 0.004, rcz + Math.sin(a)*rr]);
         if (p) pts.push(p);
       }
       pts.push(pts[0]);
@@ -1361,9 +1389,7 @@ function clickRipple(px, py){
   if (t <= 0) return;
   const hx = eye[0] + dir[0]*t, hz = eye[2] + dir[2]*t;
   if (Math.abs(hx) < WH && Math.abs(hz) < WH){
-    addRipple(hx, hz, true);
-    addRipple(hx + rnd(-0.15,0.15), hz + rnd(-0.15,0.15), false);
-    addSplash(hx, hz, 7 + (Math.random()*5|0));
+    addTapRipple(hx, hz);
     plip();
   }
 }
