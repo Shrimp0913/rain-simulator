@@ -527,11 +527,13 @@ function drawRipples(){
       if (t < 0 || t > 1) continue;
       let r, alpha;
       if (rp.tap){
-        // 点击涟漪：匀速慢扩 + 平滑淡入淡出（smoothstep，两端零斜率，消失不突兀）
+        // 点击涟漪：先快后慢地荡开（前半程即达 7 成大），后半程才慢慢淡出——
+        // 保证「清楚可见」的阶段是大圈，而不是长满之前就消失了
         const tt = Math.min(1, Math.max(0, t));
-        r = ring.maxR * tt;
-        const fadeOut = 1 - tt*tt*(3 - 2*tt);
-        const fadeIn = Math.min(1, tt/0.1);
+        r = ring.maxR * (1 - (1 - tt)*(1 - tt));
+        const fadeIn = Math.min(1, tt/0.12);
+        const fo = Math.max(0, (tt - 0.5)/0.5);   // 淡出集中在后半程
+        const fadeOut = 1 - fo*fo*(3 - 2*fo);
         alpha = ring.am * fadeIn * fadeOut;
       } else {
         r = ring.maxR * (1 - (1-t)*(1-t));
