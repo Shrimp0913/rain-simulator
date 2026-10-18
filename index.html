@@ -3180,18 +3180,17 @@ function makeClkInput(){
     clkInput.autocomplete = 'off'; clkInput.setAttribute('autocapitalize', 'off');
     clkInput.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;border:0;padding:0;margin:0;background:transparent;font-size:16px;pointer-events:none;';
     document.body.appendChild(clkInput);
-    let clkSyncing = false;
     clkInput.addEventListener('keydown', e => {      // 触屏系统键盘：与电脑同一套位编辑逻辑（拦截默认行为，value 恒空）
       const ok = (e.key >= '0' && e.key <= '9') || ['Backspace','Delete','ArrowLeft','ArrowRight','Home','End','Enter','Escape'].includes(e.key);
       if (ok) clkKey(e);                             // clkKey 内部 preventDefault
     });
-    clkInput.addEventListener('input', () => {       // 兜底：个别键盘不给 keydown → 退化为微波炉式右对齐填位
-      if (clkSyncing){ clkSyncing = false; return; }
-      const dg = ((clkInput.value || '').replace(/\D/g, '') + '0000').slice(-4);
+    clkInput.addEventListener('input', () => {       // 兜底：iOS/WKWebView 软键盘常给 key='Unidentified'（229），主路丢弃、字符落入本框 → 走这里
+      // 微波炉式右对齐：value 跨按键累积（'1'→'13'→'130'），左补零取末 4 位（'130'→'0130'=01:30）。旧版在末尾补零再切末 4 位=恒写 0000
+      // （手机/iPad「输入不进去」的根因）；旧 clkSyncing 守卫假设编程清空会再触发 input（实际不会）只会吞第二次输入，均删。
+      // 编辑期间不清 value（累加依赖它）：进编辑时 enterClockEdit 已清空，退格删到空=归零，与微波炉语义一致。
+      const dg = ('0000' + (clkInput.value || '').replace(/\D/g, '')).slice(-4);
       for (let i = 0; i < 4; i++) clkBuf[i] = dg[i];
       clkCaret = 4;
-      clkSyncing = true;
-      try { clkInput.value = ''; } catch(err){}
     });
     clkInput.addEventListener('blur', () => {        // 失焦不再提交（退出只走叉/Enter/Esc）；尝试重新聚焦保键盘（无手势时系统忽略，不影响状态）
       if (clockEdit){ try { clkInput.focus(); } catch(err){} }
